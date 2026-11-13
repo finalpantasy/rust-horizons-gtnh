@@ -26,6 +26,9 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
 framehop = { version = "0.16", default-features = false, features = ["std", "pe"] }
 object = { version = "0.39", default-features = false, features = ["read_core", "pe", "std"] }
+memmap2 = "0.9"
+pdb-addr2line = "0.12"
+rustc-demangle = "0.1"
 
 [features]
 # Set by horizon-client's `system-allocator`, which leaves nothing to count.

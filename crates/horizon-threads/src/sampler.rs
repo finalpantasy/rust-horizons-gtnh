@@ -20,7 +20,6 @@ mod linux;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(target_os = "linux")]
 pub(crate) use eh::{Loaded, StackUnwinder, loaded_modules};
 #[cfg(target_os = "linux")]
 use linux as os;
@@ -115,7 +114,6 @@ pub fn set_chunk(x: i32, z: i32) {
 }
 
 /// The name the calling thread opted in to sampling under, if it did.
-#[cfg(target_os = "linux")]
 pub(crate) fn sampled_name() -> Option<&'static str> {
     // SAFETY: LOCAL points at the state this thread's GUARD keeps alive, and is cleared before the guard drops.
     unsafe { LOCAL.with(Cell::get).as_ref() }.map(|s| s.name)

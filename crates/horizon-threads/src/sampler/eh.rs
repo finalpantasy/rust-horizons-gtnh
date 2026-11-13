@@ -92,7 +92,7 @@ pub(crate) fn loaded_modules() -> Vec<Loaded> {
 }
 
 #[cfg(windows)]
-use super::windows::loaded_modules;
+pub(crate) use super::windows::loaded_modules;
 
 fn load(m: &Loaded) -> Option<Module<Data>> {
     let cache = ReadCache::new(File::open(&m.path).ok()?);

@@ -4,14 +4,14 @@ use std::cell::Cell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering::*};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 mod cx {
     pub use crate::sampler::{
         set_block, set_chunk, set_dim, set_entity_type, set_span, set_tick, span, tick_end,
     };
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", all(windows, target_arch = "x86_64"))))]
 mod cx {
     pub fn set_block(_: u16) {}
     pub fn set_chunk(_: i32, _: i32) {}
@@ -25,7 +25,10 @@ mod cx {
     pub fn tick_end(_: u64) {}
 }
 
-const ON: bool = cfg!(target_os = "linux");
+const ON: bool = cfg!(any(
+    target_os = "linux",
+    all(windows, target_arch = "x86_64")
+));
 
 /// What an id names; 0 is always "none".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,5 +173,5 @@ pub fn tick_end(duration_ns: u64) {
     cx::tick_end(duration_ns);
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", all(windows, target_arch = "x86_64"))))]
 mod tests;

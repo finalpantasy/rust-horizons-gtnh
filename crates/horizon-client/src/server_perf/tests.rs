@@ -294,7 +294,7 @@ fn a_capture_without_the_samples_flag_has_no_samples_field() {
     assert!(!c.start[0].options.as_ref().unwrap().samples);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 mod sampled {
     use super::*;
     use horizon_threads::{sampler, work};

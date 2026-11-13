@@ -20,7 +20,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 mod tests;
 
 /// Tests that sample threads take turns: a sampler session arms every thread of the name it asks for, the other tests' too.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", all(windows, target_arch = "x86_64"))))]
 pub(crate) static SAMPLED_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 mod samples;
@@ -831,6 +831,6 @@ fn unix_ms() -> i64 {
 
 /// Keeps the calling thread's allocations out of the heap samples: it is one of the profiler's own.
 pub(crate) fn profiler_thread() {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
     horizon_threads::heap_sample::ignore_this_thread();
 }

@@ -7,13 +7,7 @@ use super::*;
 use crate::sampler::{self, Config, Kind, Record};
 
 fn cpu_ns() -> u64 {
-    let mut t = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: `t` is a valid out pointer.
-    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
-    t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64
+    sampler::thread_cpu_ns()
 }
 
 fn spin(cpu_ms: u64) {

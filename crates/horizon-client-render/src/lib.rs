@@ -103,7 +103,7 @@ pub mod pad_glyph;
 pub mod paged_maps;
 pub mod par;
 pub mod particles;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 pub mod perf_capture;
 pub mod perf_gpu;
 pub mod poi_sections;

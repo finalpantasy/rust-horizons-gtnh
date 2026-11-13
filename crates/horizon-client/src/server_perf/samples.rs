@@ -6,9 +6,9 @@ use horizon_perf_format::v1::{Overhead, SampleProfile, Side, Symbols, Unit};
 /// The longest window a capture records, and the one a capture without a window gets.
 pub const MAX_WINDOW_S: f64 = 600.0;
 
-/// Seconds per time block: 5 s, longer when the window would need more than 32 of them. Only the Linux
-/// sampler (`mod linux`, below) starts a session, so it is built there only.
-#[cfg(target_os = "linux")]
+/// Seconds per time block: 5 s, longer when the window would need more than 32 of them. Only the sampler
+/// (`mod sampled`, below) starts a session, so it is built where that is only.
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 fn block_s(window_s: f64) -> f32 {
     (window_s / 32.0).ceil().max(5.0) as f32
 }
@@ -18,13 +18,13 @@ pub struct Finished {
     pub overhead: Overhead,
 }
 
-#[cfg(target_os = "linux")]
-pub use linux::{Sampling, Stopped};
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", all(windows, target_arch = "x86_64"))))]
 pub use other::{Sampling, Stopped};
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+pub use sampled::{Sampling, Stopped};
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
+mod sampled {
     use super::*;
     use horizon_client_render::perf_capture;
     use horizon_threads::heap_sample::{self, HeapProfile};
@@ -67,9 +67,14 @@ mod linux {
                 ..profile::Config::default()
             };
             match profile::start(config) {
+                // Only Linux's allocator samples (`horizon_threads::Allocator`); elsewhere a heap session would stay empty.
                 Ok(session) => Some(Self(
                     session,
-                    heap_sample::start(heap_sample::Config::from_env(block_s(window_s))),
+                    cfg!(target_os = "linux")
+                        .then(|| {
+                            heap_sample::start(heap_sample::Config::from_env(block_s(window_s)))
+                        })
+                        .flatten(),
                 )),
                 Err(e) => {
                     log::warn!(
@@ -130,7 +135,7 @@ mod linux {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", all(windows, target_arch = "x86_64"))))]
 mod other {
     use super::*;
 

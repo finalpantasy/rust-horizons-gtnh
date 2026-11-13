@@ -7,11 +7,12 @@ pub mod allocator_stats;
 #[cfg(target_os = "windows")]
 pub mod boot_paint;
 pub mod heap_census;
-#[cfg(target_os = "linux")]
+/// Built on Windows for its types and `ignore_this_thread`; only Linux's allocator samples (`Allocator`).
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 pub mod heap_sample;
 pub mod jobs;
 pub mod process_memory;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 pub mod profile;
 #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 pub mod sampler;

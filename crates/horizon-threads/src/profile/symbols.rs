@@ -1,13 +1,27 @@
-//! In-process symbolization: the running binary's own DWARF line tables (inlined frames included), then its symbol table.
+//! In-process symbolization: the running binary's own DWARF line tables (inlined frames included), then its symbol
+//! table. On Windows, each module's PDB instead (`pdb`).
 
+#[cfg(target_os = "linux")]
 use std::borrow::Cow;
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
 use std::fs::File;
 
+#[cfg(target_os = "linux")]
 use addr2line::gimli::{self, EndianSlice, RunTimeEndian};
+#[cfg(target_os = "linux")]
 use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
 
-use crate::sampler::{Loaded, loaded_modules};
+#[cfg(target_os = "linux")]
+use crate::sampler::Loaded;
+use crate::sampler::loaded_modules;
+
+#[cfg(windows)]
+mod pdb;
+#[cfg(windows)]
+use pdb::resolve_module;
+#[cfg(windows)]
+pub use pdb::symbol_quality;
 
 /// One function at an address; `file` is a base name only, so no home directory reaches a report.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,7 +52,7 @@ impl Symbols {
 /// What the running binary can name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SymbolQuality {
-    /// Line tables: file, line and inlined functions.
+    /// Line tables: file, line and inlined functions (DWARF, or a PDB with line information on Windows).
     Dwarf,
     /// Function names only.
     Symtab,
@@ -46,6 +60,7 @@ pub enum SymbolQuality {
 }
 
 /// How well [`symbolize`] can name the functions of the running executable.
+#[cfg(target_os = "linux")]
 pub fn symbol_quality() -> SymbolQuality {
     let opened = std::env::current_exe().and_then(File::open).ok();
     // SAFETY: the mapping is read-only and dropped before this returns; see `resolve_module`.
@@ -73,9 +88,11 @@ fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
+#[cfg(target_os = "linux")]
 /// A function symbol: start, size (0 when unknown) and name.
 struct FnSym(u64, u64, String);
 
+#[cfg(target_os = "linux")]
 fn function_symbols(file: &object::File) -> Vec<FnSym> {
     let mut found: Vec<FnSym> = file
         .symbols()
@@ -87,12 +104,14 @@ fn function_symbols(file: &object::File) -> Vec<FnSym> {
     found
 }
 
+#[cfg(target_os = "linux")]
 fn from_symbol_table(symbols: &[FnSym], svma: u64) -> Option<&str> {
     let at = symbols.partition_point(|s| s.0 <= svma).checked_sub(1)?;
     let s = &symbols[at];
     (s.1 == 0 || svma < s.0 + s.1).then_some(s.2.as_str())
 }
 
+#[cfg(target_os = "linux")]
 fn resolve_module(module: &Loaded, addrs: &[u64], out: &mut Symbols) {
     let Some(file) = File::open(&module.path).ok() else {
         return;

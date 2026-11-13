@@ -807,7 +807,7 @@ fn a_server_that_joins_late_counts_from_the_captures_start_not_its_own() {
     assert_eq!(server_seconds, [11.0]);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 mod sampled {
     use super::*;
     use horizon_perf_format::v1::Symbols;
