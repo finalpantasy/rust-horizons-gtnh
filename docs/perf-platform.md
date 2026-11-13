@@ -385,6 +385,9 @@ Notes on fields:
 - `Start.settings`, `game_rules` and `horizon_options` are typed allowlists, never a dump of a file or of the
   environment (§4).
 - `Start.build.symbols` tells the summary why inlined frames merged.
+  On Windows, `SYMTAB` means a PDB without line records, from a build without debug info. It names only the
+  functions linked across codegen units, so a capture there names few of the game's own functions; build with
+  `debug = "line-tables-only"` (for example `CARGO_PROFILE_FAST_DEBUG=line-tables-only`) for names and lines.
 - Clients fill the `frame_*` fields and `fps`; servers fill `tps` and `mspt_*`. `cpu_*_cores` are in cores, not
   percent. There are no GC counts, because there is no GC: `allocs_per_s` and `allocator_commit_mb` take their place in
   the health bar.
