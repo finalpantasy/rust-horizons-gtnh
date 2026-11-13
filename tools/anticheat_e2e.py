@@ -56,7 +56,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 
@@ -947,7 +946,7 @@ def main():
     # One set of scratch HORIZON_HOME and XDG folders for every server below.
     os.environ.update(lab.game_env())
     failed = []
-    with tempfile.TemporaryDirectory(prefix='anticheat-e2e-') as scratch:
+    with lab.temp_folder('anticheat-e2e-') as scratch:
         for name in args.check or DEFAULT:
             try:
                 CHECKS[name](bins, Path(scratch), out, args.seconds)
