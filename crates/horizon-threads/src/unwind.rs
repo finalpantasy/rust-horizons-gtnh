@@ -31,7 +31,18 @@ impl StackBounds {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    /// The calling thread's stack: its reserved range, of which everything above the stack pointer is committed.
+    #[cfg(windows)]
+    pub fn current() -> Option<Self> {
+        let (mut lo, mut hi) = (0, 0);
+        // SAFETY: both out-pointers are live locals.
+        unsafe {
+            windows_sys::Win32::System::Threading::GetCurrentThreadStackLimits(&mut lo, &mut hi)
+        };
+        (hi > lo).then_some(Self { lo, hi })
+    }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
     pub fn current() -> Option<Self> {
         None
     }

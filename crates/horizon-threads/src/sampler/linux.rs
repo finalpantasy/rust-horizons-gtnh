@@ -1,7 +1,9 @@
 //! Linux: a per-thread CPU-time POSIX timer signals SIGPROF to its own thread.
 
 use std::io;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+use super::ThreadState;
 
 #[derive(Default)]
 pub struct Target {
@@ -27,13 +29,13 @@ impl Target {
     }
 }
 
-pub fn arm(target: &Target, hz: u32) -> io::Result<Timer> {
-    arm_clock(target, hz, None)
+pub fn arm(state: &Arc<ThreadState>, hz: u32) -> io::Result<Timer> {
+    arm_clock(&state.target, hz, None)
 }
 
 /// A timer on the monotonic clock, signalling SIGRTMIN: it queues, so it never merges with a CPU-time SIGPROF.
-pub fn arm_wall(target: &Target, hz: u32) -> io::Result<Timer> {
-    arm_clock(target, hz, Some(libc::CLOCK_MONOTONIC))
+pub fn arm_wall(state: &Arc<ThreadState>, hz: u32) -> io::Result<Timer> {
+    arm_clock(&state.target, hz, Some(libc::CLOCK_MONOTONIC))
 }
 
 fn arm_clock(target: &Target, hz: u32, wall: Option<libc::clockid_t>) -> io::Result<Timer> {

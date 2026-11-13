@@ -1,4 +1,5 @@
-//! In-process stack sampling of named threads: per-thread rings filled by a signal handler, nothing running while off.
+//! In-process stack sampling of named threads: per-thread rings filled by a signal handler (Linux) or by a sampler
+//! thread that suspends each one in turn (Windows), nothing running while off.
 
 use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::cell::{Cell, RefCell};
@@ -14,10 +15,17 @@ use std::time::Instant;
 use crate::unwind::{self, MAX_FRAMES, StackBounds};
 
 mod eh;
+#[cfg(target_os = "linux")]
 mod linux;
+#[cfg(windows)]
+mod windows;
 
+#[cfg(target_os = "linux")]
 pub(crate) use eh::{Loaded, StackUnwinder, loaded_modules};
+#[cfg(target_os = "linux")]
 use linux as os;
+#[cfg(windows)]
+use windows as os;
 
 pub const DEFAULT_HZ: u32 = 250;
 const TIME_EVERY: u32 = 64;
@@ -69,6 +77,19 @@ struct Cells {
     dim: AtomicU8,
 }
 
+impl Cells {
+    fn get(&self) -> Context {
+        Context {
+            tick: self.tick.load(Relaxed),
+            span: self.span.load(Relaxed),
+            entity_type: self.entity.load(Relaxed),
+            chunk: (self.chunk.0.load(Relaxed), self.chunk.1.load(Relaxed)),
+            block: self.block.load(Relaxed),
+            dim: self.dim.load(Relaxed),
+        }
+    }
+}
+
 thread_local! {
     static CTX: Cells = const { Cells { tick: AtomicU64::new(0), span: AtomicU16::new(0), entity: AtomicU16::new(0),
         chunk: (AtomicI32::new(0), AtomicI32::new(0)), block: AtomicU16::new(0), dim: AtomicU8::new(0) } };
@@ -94,6 +115,7 @@ pub fn set_chunk(x: i32, z: i32) {
 }
 
 /// The name the calling thread opted in to sampling under, if it did.
+#[cfg(target_os = "linux")]
 pub(crate) fn sampled_name() -> Option<&'static str> {
     // SAFETY: LOCAL points at the state this thread's GUARD keeps alive, and is cleared before the guard drops.
     unsafe { LOCAL.with(Cell::get).as_ref() }.map(|s| s.name)
@@ -104,14 +126,7 @@ pub fn span() -> u16 {
 }
 
 pub fn context() -> Context {
-    CTX.with(|c| Context {
-        tick: c.tick.load(Relaxed),
-        span: c.span.load(Relaxed),
-        entity_type: c.entity.load(Relaxed),
-        chunk: (c.chunk.0.load(Relaxed), c.chunk.1.load(Relaxed)),
-        block: c.block.load(Relaxed),
-        dim: c.dim.load(Relaxed),
-    })
+    CTX.with(Cells::get)
 }
 
 /// The interrupted registers; `lr` is the link register on aarch64 and 0 elsewhere.
@@ -160,12 +175,12 @@ impl Slot {
         unsafe { self.header.cast::<u8>().add(HDR) }
     }
 
-    fn write(&self, tag: u8, payload: usize, value: u64, regs: Regs) {
+    fn write(&self, tag: u8, payload: usize, value: u64, regs: Regs, ctx: Context) {
         let header = Header {
             len: self.total as u32,
             tag,
             payload: payload as u32,
-            ctx: context(),
+            ctx,
             value,
             regs,
         };
@@ -281,6 +296,8 @@ struct ThreadState {
     name: &'static str,
     target: os::Target,
     bounds: StackBounds,
+    /// The thread's own `CTX`, for a sampler thread to read; its atomics outlive the registration.
+    cells: AtomicPtr<Cells>,
     /// The ring samples go to: the last of `rings`, null before the first session.
     ring: AtomicPtr<Ring>,
     /// Every ring this thread has had; a replaced one stays allocated, as a late signal's handler may still hold it.
@@ -304,6 +321,16 @@ struct ThreadState {
 }
 
 impl ThreadState {
+    fn context(&self) -> Context {
+        // SAFETY: set at registration to the thread's CTX, which lives as long as the thread, past its registration.
+        unsafe { self.cells.load(Relaxed).as_ref() }.map_or_else(Context::default, Cells::get)
+    }
+
+    fn add_timed(&self, ns: u64) {
+        self.timed_ns.fetch_add(ns, Relaxed);
+        self.timed.fetch_add(1, Relaxed);
+    }
+
     fn ring(&self) -> Option<&Ring> {
         // SAFETY: a non-null pointer is a box in `rings`, which only grows while self lives.
         unsafe { self.ring.load(Acquire).as_ref() }
@@ -358,6 +385,7 @@ pub fn sampled_thread(name: &'static str) -> bool {
             name,
             target,
             bounds,
+            cells: AtomicPtr::new(CTX.with(|c| std::ptr::from_ref(c).cast_mut())),
             ..Default::default()
         });
         REGISTRY.lock().unwrap().push(state.clone());
@@ -368,25 +396,42 @@ pub fn sampled_thread(name: &'static str) -> bool {
 }
 
 /// Called from the signal handler on the sampled thread with the interrupted registers; `wall` is the wall-clock timer's signal.
+#[cfg(target_os = "linux")]
 fn on_sample(regs: Regs, wall: bool) {
     // SAFETY: LOCAL points at the state this thread's GUARD keeps alive, and is cleared before the guard drops.
     let Some(state) = (unsafe { LOCAL.with(Cell::get).as_ref() }) else {
         return;
     };
-    let Some(ring) = state.ring() else { return };
+    let timed = state.seen.load(Relaxed).is_multiple_of(TIME_EVERY);
+    let started = if timed { os::thread_cpu_ns() } else { 0 };
+    let cpu_ns = if wall { os::thread_cpu_ns() } else { 0 };
+    // SAFETY: the registers are this thread's, interrupted by the signal.
+    if unsafe { record_sample(state, regs, wall, cpu_ns) } && timed {
+        state.add_timed(os::thread_cpu_ns().saturating_sub(started));
+    }
+}
+
+/// Writes one sample of `state`'s thread; false when it isn't armed or is writing a tick marker. `cpu_ns` is the
+/// thread's CPU clock now, used by wall samples only. Allocates nothing and takes no lock.
+///
+/// # Safety
+/// `regs` are the thread's registers while it is stopped (a signal handler on it, or suspended), so its stack from
+/// `regs.sp` up is mapped and unchanging until this returns.
+unsafe fn record_sample(state: &ThreadState, regs: Regs, wall: bool, cpu_ns: u64) -> bool {
+    let Some(ring) = state.ring() else {
+        return false;
+    };
     if !state.armed.load(Acquire) {
-        return;
+        return false;
     }
     if state.busy.load(Relaxed) {
         ring.dropped.fetch_add(1, Relaxed);
-        return;
+        return false;
     }
-    let timed = state.seen.fetch_add(1, Relaxed) % TIME_EVERY == 0;
-    let started = if timed { os::thread_cpu_ns() } else { 0 };
+    state.seen.fetch_add(1, Relaxed);
     // Running means most of the interval went to CPU time; the handlers' own few microseconds don't count.
     let tag = if wall {
-        let now = os::thread_cpu_ns();
-        let used = now.saturating_sub(state.wall_cpu_ns.swap(now, Relaxed));
+        let used = cpu_ns.saturating_sub(state.wall_cpu_ns.swap(cpu_ns, Relaxed));
         WALL | u64::from(used > state.wall_period_ns.load(Relaxed) / 2)
     } else {
         0
@@ -403,23 +448,18 @@ fn on_sample(regs: Regs, wall: bool) {
             // SAFETY: the slot's payload holds MAX_FRAMES words, 8-aligned.
             let frames =
                 unsafe { std::slice::from_raw_parts_mut(slot.payload().cast(), MAX_FRAMES) };
-            // SAFETY: bounds are this thread's stack and the registers are its interrupted ones.
+            // SAFETY: bounds are this thread's stack and the registers are its stopped ones (the caller's contract).
             let depth = unsafe { unwind::walk(regs.pc, regs.fp, regs.sp, bounds, frames) };
-            slot.write(TAG_FRAMES, depth * 8, tag, regs);
+            slot.write(TAG_FRAMES, depth * 8, tag, regs, state.context());
         } else {
             // SAFETY: [sp, sp + copied) lies inside this thread's mapped stack and the slot's payload holds that many bytes.
             unsafe { std::ptr::copy_nonoverlapping(regs.sp as *const u8, slot.payload(), copied) };
-            slot.write(TAG_COPY, copied, tag, regs);
+            slot.write(TAG_COPY, copied, tag, regs, state.context());
         }
         ring.publish(&slot);
         state.samples.fetch_add(1, Relaxed);
     }
-    if timed {
-        state
-            .timed_ns
-            .fetch_add(os::thread_cpu_ns().saturating_sub(started), Relaxed);
-        state.timed.fetch_add(1, Relaxed);
-    }
+    true
 }
 
 /// The calling thread's CPU clock in nanoseconds.
@@ -440,7 +480,7 @@ pub fn tick_end(duration_ns: u64) {
     state.busy.store(true, Relaxed);
     compiler_fence(SeqCst);
     if let Some(slot) = ring.reserve(0) {
-        slot.write(TAG_TICK, 0, duration_ns, Regs::default());
+        slot.write(TAG_TICK, 0, duration_ns, Regs::default(), context());
         ring.publish(&slot);
     }
     compiler_fence(SeqCst);
@@ -532,12 +572,12 @@ pub fn start(config: Config, select: impl Fn(&str) -> bool) -> io::Result<Sessio
         state.copy_bytes.store(copy, Relaxed);
         state.armed.store(true, Release);
         session.threads.push(state.clone());
-        *state.timer.lock().unwrap() = Some(os::arm(&state.target, config.hz)?);
+        *state.timer.lock().unwrap() = Some(os::arm(state, config.hz)?);
         if config.wall {
             let period = 1_000_000_000 / u64::from(config.hz.max(1));
             state.wall_period_ns.store(period, Relaxed);
             state.wall_cpu_ns.store(0, Relaxed);
-            *state.wall_timer.lock().unwrap() = Some(os::arm_wall(&state.target, config.hz)?);
+            *state.wall_timer.lock().unwrap() = Some(os::arm_wall(state, config.hz)?);
         }
     }
     if session.threads.is_empty() {

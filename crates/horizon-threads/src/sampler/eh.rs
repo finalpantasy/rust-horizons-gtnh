@@ -1,6 +1,8 @@
-//! Unwinds a copied stack with the loaded objects' `.eh_frame` tables (framehop); runs on the draining thread only.
+//! Unwinds a copied stack with the loaded objects' unwind tables (framehop): `.eh_frame` in ELF, `.pdata` in PE.
+//! Runs on the draining thread only.
 
 use std::collections::HashSet;
+#[cfg(target_os = "linux")]
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::File;
 use std::ops::Range;
@@ -14,7 +16,7 @@ use super::Regs;
 
 type Data = Arc<[u8]>;
 
-/// A loaded ELF object: its file, load bias and address range.
+/// A loaded object: its file, load bias (ELF) or load address (PE), and address range.
 pub(crate) struct Loaded {
     pub path: String,
     pub base: u64,
@@ -26,7 +28,7 @@ struct Sections<'a>(object::File<'a, &'a ReadCache<File>>);
 
 impl ModuleSectionInfo<Data> for Sections<'_> {
     fn base_svma(&self) -> u64 {
-        0
+        self.0.relative_address_base()
     }
 
     fn section_svma_range(&mut self, name: &[u8]) -> Option<Range<u64>> {
@@ -39,6 +41,7 @@ impl ModuleSectionInfo<Data> for Sections<'_> {
     }
 }
 
+#[cfg(target_os = "linux")]
 unsafe extern "C" fn collect(
     info: *mut libc::dl_phdr_info,
     _: libc::size_t,
@@ -75,6 +78,7 @@ unsafe extern "C" fn collect(
 }
 
 /// The objects mapped into the process now.
+#[cfg(target_os = "linux")]
 pub(crate) fn loaded_modules() -> Vec<Loaded> {
     let mut modules: Vec<Loaded> = Vec::new();
     // SAFETY: the callback runs before this returns and only touches `modules`.
@@ -86,6 +90,9 @@ pub(crate) fn loaded_modules() -> Vec<Loaded> {
     };
     modules
 }
+
+#[cfg(windows)]
+use super::windows::loaded_modules;
 
 fn load(m: &Loaded) -> Option<Module<Data>> {
     let cache = ReadCache::new(File::open(&m.path).ok()?);
@@ -123,7 +130,7 @@ impl StackUnwinder {
         }
     }
 
-    /// Adds the objects loaded since the last call (a `dlopen`ed driver's frames resolve from the next drain on).
+    /// Adds the objects loaded since the last call (a driver loaded later resolves from the next drain on).
     pub fn refresh(&mut self) {
         let modules = loaded_modules();
         for m in modules.iter().filter(|m| self.seen.insert(m.base)) {
