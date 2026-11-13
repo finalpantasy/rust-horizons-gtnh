@@ -226,7 +226,13 @@ fn run() {
         }
         let now = Instant::now();
         for armed in sampler.armed.iter_mut().filter(|a| a.due <= now) {
-            armed.due = (armed.due + armed.period).max(now);
+            // CPU timers keep their phase and catch up (`MAX_CATCH_UP`). A wall visit comes a whole period after the
+            // last one: "running" means more than half a period of CPU since then, so a short gap would read as waiting.
+            armed.due = if armed.wall {
+                now + armed.period
+            } else {
+                (armed.due + armed.period).max(now)
+            };
             visit(armed);
         }
         let next = sampler.armed.iter().map(|a| a.due).min().unwrap_or(now);
