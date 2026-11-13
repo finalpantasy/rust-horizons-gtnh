@@ -143,10 +143,16 @@ impl StackUnwinder {
     /// Unwinds `regs` over `stack`, a copy of the thread's memory from `regs.sp` up, into `out`; returns the frames written.
     pub fn unwind(&mut self, regs: &Regs, stack: &[u8], out: &mut [usize]) -> usize {
         let sp = regs.sp as u64;
+        // A word past the copy's end reads as 0, which framehop takes as the end of the stack. An error there would make
+        // framehop cache its frame-pointer fallback for the function it was unwinding (its `Err(_) => fallback_rule()`),
+        // and every later sample through that function would follow its frame register as a frame pointer and report
+        // stack data as return addresses. Below sp stays an error: framehop tolerates that in a first frame's epilogue.
         let read = |addr: u64| -> Result<u64, ()> {
             let at = usize::try_from(addr.checked_sub(sp).ok_or(())?).map_err(|_| ())?;
-            let word = stack.get(at..at.checked_add(8).ok_or(())?).ok_or(())?;
-            Ok(u64::from_ne_bytes(word.try_into().map_err(|_| ())?))
+            match stack.get(at..at.saturating_add(8)) {
+                Some(word) => Ok(u64::from_ne_bytes(word.try_into().map_err(|_| ())?)),
+                None => Ok(0),
+            }
         };
         self.unwind_with(regs, read, out)
     }

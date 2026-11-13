@@ -156,6 +156,32 @@ fn a_forty_deep_recursion_unwinds_in_this_builds_default_mode() {
     deep_recursion_unwinds("t-deep", HZ_1K);
 }
 
+/// A copy that ends inside a frame whose unwind needs the stack past it (`on_deep_stack`'s 20 KiB, unwound through its
+/// frame register on Windows) ends the walk there, in this sample and in every later one.
+#[cfg(windows)]
+#[test]
+fn a_walk_that_runs_past_the_copy_ends_there_in_every_sample() {
+    let (records, _, _) = sampled("t-copy-end", COPY_1K, || on_deep_stack(|| recurse(8, 300)));
+    let samples = cpu(&records);
+    let modules = os::loaded_modules();
+    let wrong: Vec<&[usize]> = samples
+        .iter()
+        .map(|r| r.stack())
+        .filter(|s| {
+            !s.iter()
+                .all(|&a| modules.iter().any(|m| m.range.contains(&(a as u64))))
+        })
+        .collect();
+    assert!(samples.len() >= 150, "{} samples", samples.len());
+    assert!(
+        wrong.is_empty(),
+        "{} of {} samples hold a frame outside every module, first {:x?}",
+        wrong.len(),
+        samples.len(),
+        wrong[0]
+    );
+}
+
 #[test]
 fn an_allocating_thread_survives_ten_seconds_of_signals() {
     let (_, stats, (loops, bad)) = sampled("t-alloc", COPY_1K, || {
