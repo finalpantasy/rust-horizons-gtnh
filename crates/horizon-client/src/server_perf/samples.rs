@@ -67,14 +67,9 @@ mod sampled {
                 ..profile::Config::default()
             };
             match profile::start(config) {
-                // Only Linux's allocator samples (`horizon_threads::Allocator`); elsewhere a heap session would stay empty.
                 Ok(session) => Some(Self(
                     session,
-                    cfg!(target_os = "linux")
-                        .then(|| {
-                            heap_sample::start(heap_sample::Config::from_env(block_s(window_s)))
-                        })
-                        .flatten(),
+                    heap_sample::start(heap_sample::Config::from_env(block_s(window_s))),
                 )),
                 Err(e) => {
                     log::warn!(

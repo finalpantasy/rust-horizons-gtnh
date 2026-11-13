@@ -3,13 +3,19 @@ use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+#[cfg(not(windows))]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering::*};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::profile::{Aggregate, Key, State};
-use crate::sampler::{self, Regs, StackUnwinder};
-use crate::unwind::{self, MAX_FRAMES, StackBounds};
+use crate::sampler;
+#[cfg(not(windows))]
+use crate::sampler::{Regs, StackUnwinder};
+use crate::unwind::MAX_FRAMES;
+#[cfg(not(windows))]
+use crate::unwind::{self, StackBounds};
 
 /// Bytes between samples on average when `HORIZON_HEAP_SAMPLE_KIB` is unset.
 pub const DEFAULT_INTERVAL: usize = 512 * 1024;
@@ -24,7 +30,9 @@ static SESSION: AtomicU32 = AtomicU32::new(0);
 static LIVE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 static BUCKETS: [AtomicU8; 1 << BUCKET_BITS] = [const { AtomicU8::new(0) }; 1 << BUCKET_BITS];
 static HEAP: Mutex<Option<Heap>> = Mutex::new(None);
+#[cfg(not(windows))]
 static UNWINDER: Mutex<Option<StackUnwinder>> = Mutex::new(None);
+#[cfg(not(windows))]
 static FRAME_POINTERS: OnceLock<bool> = OnceLock::new();
 static SEED: AtomicUsize = AtomicUsize::new(0x9E37_79B9);
 
@@ -34,6 +42,7 @@ thread_local! {
     static BUSY: Cell<bool> = const { Cell::new(false) };
     static RNG: Cell<u64> = const { Cell::new(0) };
     static THREAD: Cell<(u32, u16)> = const { Cell::new((0, 0)) };
+    #[cfg(not(windows))]
     static BOUNDS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
     static SAMPLED: Cell<u64> = const { Cell::new(0) };
     static IGNORED: Cell<bool> = const { Cell::new(false) };
@@ -259,6 +268,7 @@ fn unbucket(ptr: usize) {
     }
 }
 
+#[cfg(not(windows))]
 fn bounds() -> Option<StackBounds> {
     let (lo, hi) = match BOUNDS.get() {
         (0, 0) => {
@@ -272,6 +282,7 @@ fn bounds() -> Option<StackBounds> {
 }
 
 /// The calling thread's stack, innermost first: frame pointers when the build keeps them, else its `.eh_frame` tables.
+#[cfg(not(windows))]
 #[inline(never)]
 fn capture(out: &mut [usize]) -> usize {
     let Some(bounds) = bounds() else {
@@ -309,7 +320,20 @@ fn capture(out: &mut [usize]) -> usize {
     unwinder.unwind_with(&regs, read, out)
 }
 
-#[cfg(target_arch = "x86_64")]
+/// The calling thread's stack, innermost first, from Windows' own unwinder (each module's `.pdata`). It allocates nothing,
+/// takes none of the profiler's locks, and knows modules loaded after the session started.
+#[cfg(windows)]
+#[inline(never)]
+fn capture(out: &mut [usize]) -> usize {
+    use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
+    let len = u32::try_from(out.len()).unwrap_or(u32::MAX);
+    // SAFETY: writes at most `len` return addresses into `out`; the hash pointer may be null.
+    usize::from(unsafe {
+        RtlCaptureStackBackTrace(0, len, out.as_mut_ptr().cast(), std::ptr::null_mut())
+    })
+}
+
+#[cfg(all(not(windows), target_arch = "x86_64"))]
 #[inline(always)]
 fn registers() -> Regs {
     let (pc, sp, fp): (usize, usize, usize);
@@ -320,7 +344,7 @@ fn registers() -> Regs {
     Regs { pc, fp, sp, lr: 0 }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(not(windows), target_arch = "aarch64"))]
 #[inline(always)]
 fn registers() -> Regs {
     let (pc, sp, fp, lr): (usize, usize, usize, usize);
@@ -331,7 +355,10 @@ fn registers() -> Regs {
     Regs { pc, fp, sp, lr }
 }
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[cfg(all(
+    not(windows),
+    not(any(target_arch = "x86_64", target_arch = "aarch64"))
+))]
 #[inline(always)]
 fn registers() -> Regs {
     Regs::default()
@@ -444,12 +471,16 @@ pub fn start(config: Config) -> Option<Session> {
         return None;
     }
     let was = BUSY.replace(true);
-    let fp = *FRAME_POINTERS.get_or_init(unwind::frame_pointers_present);
-    *lock(&UNWINDER) = (!fp).then(|| {
-        let mut u = StackUnwinder::new();
-        u.refresh();
-        u
-    });
+    // Windows' `capture` unwinds with the system's own tables.
+    #[cfg(not(windows))]
+    {
+        let fp = *FRAME_POINTERS.get_or_init(unwind::frame_pointers_present);
+        *lock(&UNWINDER) = (!fp).then(|| {
+            let mut u = StackUnwinder::new();
+            u.refresh();
+            u
+        });
+    }
     let session = SESSION.fetch_add(1, Relaxed).wrapping_add(1);
     *lock(&HEAP) = Some(Heap {
         session,
@@ -505,7 +536,10 @@ impl Session {
             LIVE_SAMPLES.store(0, Relaxed);
         }
         drop(guard);
-        *lock(&UNWINDER) = None;
+        #[cfg(not(windows))]
+        {
+            *lock(&UNWINDER) = None;
+        }
         let profile = heap.map(|mut h| {
             let agg = std::mem::replace(&mut h.agg, Aggregate::new(0));
             h.profile(agg)

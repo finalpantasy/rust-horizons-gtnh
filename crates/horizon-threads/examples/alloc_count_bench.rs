@@ -37,7 +37,7 @@ fn main() {
             "{threads} thread(s): mimalloc {plain:.2} ns/pair, counting {counted:.2} ns/pair, +{:.2} ns",
             counted - plain
         );
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
         {
             let (mut plain, mut sampling) = (f64::MAX, f64::MAX);
             for _ in 0..5 {

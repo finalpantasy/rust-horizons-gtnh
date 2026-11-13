@@ -7,7 +7,7 @@ pub mod allocator_stats;
 #[cfg(target_os = "windows")]
 pub mod boot_paint;
 pub mod heap_census;
-/// Built on Windows for its types and `ignore_this_thread`; only Linux's allocator samples (`Allocator`).
+/// The game's allocator samples on Linux and Windows x86-64 (`Allocator`).
 #[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 pub mod heap_sample;
 pub mod jobs;
@@ -523,10 +523,10 @@ pub fn catch_stop_signals() {}
 /// World generation, meshing and the tick allocate and free small blocks on
 /// every worker at once; the system heaps serialise them (Windows' heap was
 /// 16% of a chunk's generation time), mimalloc keeps a heap per thread.
-/// On Linux it samples allocations while a capture runs (`heap_sample`).
-#[cfg(target_os = "linux")]
+/// On Linux and Windows x86-64 it samples allocations while a capture runs (`heap_sample`).
+#[cfg(any(target_os = "linux", all(windows, target_arch = "x86_64")))]
 pub type Allocator = heap_sample::SamplingAllocator;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", all(windows, target_arch = "x86_64"))))]
 pub type Allocator = mimalloc::MiMalloc;
 /// The game's mimalloc allocator.
 pub const ALLOCATOR: Allocator = Allocator {};

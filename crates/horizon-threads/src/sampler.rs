@@ -20,7 +20,9 @@ mod linux;
 #[cfg(windows)]
 mod windows;
 
-pub(crate) use eh::{Loaded, StackUnwinder, loaded_modules};
+#[cfg(target_os = "linux")]
+pub(crate) use eh::StackUnwinder;
+pub(crate) use eh::{Loaded, loaded_modules};
 #[cfg(target_os = "linux")]
 use linux as os;
 #[cfg(windows)]

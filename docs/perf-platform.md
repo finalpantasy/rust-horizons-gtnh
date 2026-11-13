@@ -510,7 +510,7 @@ Notes on fields:
 |---|---|---|---|---|---|
 | start, history, slow, health, counters, marks, warnings, stop | server | client | both | server (on the server and in the client's file) | client |
 | span_blocks, spans | server | client | both | server | client |
-| samples | by default where the sampler exists (Linux today); `--no-samples` | by default | both | by default | with `--profile` |
+| samples | by default where the sampler exists (Linux and Windows x86-64); `--no-samples` | by default | both | by default | with `--profile` |
 | gpu | — | with `--gpu` (on when F3 pass timing is on) | client | — | yes |
 | net | yes | its own bytes | server | server | — |
 | world, workers | yes | integrated server only | server | server | — |
@@ -1045,7 +1045,7 @@ prints it, and adds a warning when a budget is exceeded.
 | Spans aggregate | during a capture; always on dedicated servers (it feeds the slow ring) | ≤ 1% of MSPT | "usually well under 1%" (`docs/hosting.md`), calibrated per machine (`report.rs:282-293`) |
 | CPU samples, 250 Hz | during a capture | < 1% of the sampled thread; writer < 0.5% of a core | ~0.05% + 0.13% of a core (measured during the sampler work) |
 | Wall samples | `--wall` | < 1% of the sampled thread | same handler |
-| Heap samples (`alloc`, `live`) | with the CPU samples, one session per process; every 512 KiB on average (`HORIZON_HEAP_SAMPLE_KIB`, 0 turns it off) | < 3% of MSPT; off: one relaxed load per alloc and per free | 200 walking bots: 1.2% of the tick thread's CPU, most of it `.eh_frame` unwinding (~40-70 µs a sample without frame pointers); captures +22-35%. Off: within the margin of error |
+| Heap samples (`alloc`, `live`) | with the CPU samples, one session per process; every 512 KiB on average (`HORIZON_HEAP_SAMPLE_KIB`, 0 turns it off) | < 3% of MSPT; off: one relaxed load per alloc and per free | 200 walking bots: 1.2% of the tick thread's CPU, most of it `.eh_frame` unwinding (~40-70 µs a sample without frame pointers); captures +22-35%. Off: within the margin of error. Windows x86-64 takes the stack with `RtlCaptureStackBackTrace`: ~4 µs a sample in the `heap_sample` tests' release build; off, +0.4-0.5 ns per allocate-and-free pair (`alloc_count_bench`) |
 | Context stores | always (plain stores) | < 2 ns each | within the margin of error |
 | Alloc counters | `alloc-count` builds | +1-2 ns per allocation | `docs/memory.md` on `perf/alloc-count` |
 | Counters | always | one relaxed atomic per `add` | |
